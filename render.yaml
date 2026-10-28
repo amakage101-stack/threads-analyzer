@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: threads-analyzer
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    plan: free
+    envVars:
+      - key: APIFY_API_TOKEN
+        sync: false
