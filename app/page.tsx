@@ -16,68 +16,114 @@ type AnalysisResult = {
 
 function value(post: Post, keys: string[]): unknown {
   for (const key of keys) {
-    if (post[key] !== undefined && post[key] !== null && post[key] !== "") {
-      return post[key];
+    const v = post[key];
+    if (v !== undefined && v !== null && v !== "") {
+      return v;
     }
   }
   return undefined;
 }
 
-function text(post: Post): string {
-  const v = value(post, ["text", "caption", "content", "body"]);
-  return typeof v === "string" ? v : "本文なし";
+function display(v: unknown): string {
+  if (v === undefined || v === null || v === "") {
+    return "不明";
+  }
+  if (typeof v === "object") {
+    return JSON.stringify(v);
+  }
+  return String(v);
 }
 
-function date(post: Post): number {
+function postText(post: Post): string {
+  return display(value(post, ["text", "caption", "content", "body"]));
+}
+
+function timestamp(post: Post): number {
   const raw = value(post, ["createdAt", "created_at", "timestamp"]);
-  if (typeof raw === "number") return raw < 1e12 ? raw * 1000 : raw;
+
+  if (typeof raw === "number") {
+    return raw < 1e12 ? raw * 1000 : raw;
+  }
+
   if (typeof raw === "string") {
     const parsed = Date.parse(raw);
     if (!Number.isNaN(parsed)) return parsed;
+
     const numeric = Number(raw);
-    if (!Number.isNaN(numeric)) return numeric < 1e12 ? numeric * 1000 : numeric;
+    if (!Number.isNaN(numeric)) {
+      return numeric < 1e12 ? numeric * 1000 : numeric;
+    }
   }
+
   return 0;
 }
 
 function dateLabel(post: Post): string {
-  const ms = date(post);
-  return ms ? new Date(ms).toLocaleString("ja-JP") : "日時不明";
+  const time = timestamp(post);
+  return time
+    ? new Date(time).toLocaleString("ja-JP")
+    : "日時不明";
 }
 
-function postUrl(post: Post): string {
+function postLink(post: Post): string {
   const v = value(post, ["url", "postUrl", "permalink", "link"]);
   return typeof v === "string" ? v : "";
 }
 
-function Card({ post, title }: { post: Post; title: string }) {
-  const url = postUrl(post);
+function PostCard({
+  post,
+  title,
+}: {
+  post: Post;
+  title: string;
+}) {
+  const link = postLink(post);
   const likes = value(post, ["likeCount", "likesCount", "likes"]);
 
   return (
     <article
       style={{
+        marginTop: 12,
         padding: 16,
         border: "1px solid #ddd",
         borderRadius: 12,
-        background: "white",
-        marginTop: 10,
+        background: "#fff",
+        color: "#172033",
         overflowWrap: "anywhere",
       }}
     >
-      <strong>{title}</strong>
-      <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{text(post)}</p>
-      <p style={{ color: "#666", fontSize: 13 }}>
-        {dateLabel(post)} · いいね {likes ?? "不明"}
+      <h3 style={{ marginTop: 0 }}>{title}</h3>
+
+      <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>
+        {postText(post)}
       </p>
-      {url.startsWith("https://") && (
-        <a href={url} target="_blank" rel="noreferrer">
-          Threadsで投稿を見る
-        </a>
+
+      <p style={{ color: "#666", fontSize: 13 }}>
+        投稿日：{dateLabel(post)}
+      </p>
+
+      <p>いいね：{display(likes)}</p>
+
+      {link.startsWith("https://") && (
+        <p>
+          <a href={link} target="_blank" rel="noreferrer">
+            Threadsで投稿を見る
+          </a>
+        </p>
       )}
-      <details style={{ marginTop: 10 }}>
-        <summary>元データ</summary>
-        <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontSize: 12 }}>
+
+      <details style={{ marginTop: 12 }}>
+        <summary>取得した元データを確認</summary>
+        <pre
+          style={{
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            fontSize: 12,
+            background: "#f3f4f6",
+            padding: 12,
+            borderRadius: 8,
+          }}
+        >
           {JSON.stringify(post, null, 2)}
         </pre>
       </details>
@@ -96,15 +142,24 @@ export default function Home() {
     setResult(null);
 
     let parsed: URL;
+
     try {
       parsed = new URL(url.trim());
     } catch {
-      setError("ThreadsのプロフィールURLを入力してください。");
+      setError("ThreadsのプロフィールURLを正しく入力してください。");
       return;
     }
 
+    const validHost = [
+      "threads.net",
+      "www.threads.net",
+      "threads.com",
+      "www.threads.com",
+    ].includes(parsed.hostname);
+
     if (
-      !["threads.net", "www.threads.net", "threads.com", "www.threads.com"].includes(parsed.hostname) ||
+      !["https:", "http:"].includes(parsed.protocol) ||
+      !validHost ||
       !/^\/@[\w.]+\/?$/.test(parsed.pathname)
     ) {
       setError("有効なThreadsプロフィールURLを入力してください。");
@@ -112,17 +167,31 @@ export default function Home() {
     }
 
     setLoading(true);
+
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ profileUrl: url.trim() }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          profileUrl: url.trim(),
+        }),
       });
+
       const data: AnalysisResult = await response.json();
-      if (!response.ok) throw new Error(data.error || "取得に失敗しました。");
+
+      if (!response.ok) {
+        throw new Error(data.error || "投稿の取得に失敗しました。");
+      }
+
       setResult(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "通信エラーが発生しました。");
+      setError(
+        e instanceof Error
+          ? e.message
+          : "通信エラーが発生しました。"
+      );
     } finally {
       setLoading(false);
     }
@@ -131,9 +200,13 @@ export default function Home() {
   const roots = result?.posts ?? [];
   const replies = result?.ownReplies ?? [];
 
-  // 投稿と返信を時系列で扱い、返信の紐づけ候補を探す
-  const sortedRoots = [...roots].sort((a, b) => date(a) - date(b));
-  const sortedReplies = [...replies].sort((a, b) => date(a) - date(b));
+  const sortedRoots = [...roots].sort(
+    (a, b) => timestamp(a) - timestamp(b)
+  );
+
+  const sortedReplies = [...replies].sort(
+    (a, b) => timestamp(a) - timestamp(b)
+  );
 
   const groups = sortedRoots.map((root) => ({
     root,
@@ -143,27 +216,44 @@ export default function Home() {
   const unmatched: Post[] = [];
 
   for (const reply of sortedReplies) {
-    const replyTime = date(reply);
+    const replyTime = timestamp(reply);
     const position = Number(value(reply, ["threadPosition"]) ?? 0);
 
+    const replyAuthor = String(
+      value(reply, ["authorUsername", "username"]) ?? ""
+    ).replace(/^@/, "").toLowerCase();
+
     const candidates = groups.filter((group) => {
-      const rootTime = date(group.root);
-      const sameAuthor =
-        String(value(group.root, ["authorUsername", "username"]) ?? "").replace(/^@/, "").toLowerCase() ===
-        String(value(reply, ["authorUsername", "username"]) ?? "").replace(/^@/, "").toLowerCase();
+      const rootTime = timestamp(group.root);
+
+      const rootAuthor = String(
+        value(group.root, ["authorUsername", "username"]) ?? ""
+      ).replace(/^@/, "").toLowerCase();
+
+      const lastPosition = group.replies.reduce(
+        (max, item) =>
+          Math.max(
+            max,
+            Number(value(item, ["threadPosition"]) ?? 0)
+          ),
+        0
+      );
 
       return (
-        sameAuthor &&
+        replyAuthor !== "" &&
+        rootAuthor === replyAuthor &&
         rootTime > 0 &&
         replyTime >= rootTime &&
         replyTime - rootTime <= 30 * 60 * 1000 &&
-        !group.replies.some((item) => Number(value(item, ["threadPosition"]) ?? 0) >= position)
+        position >= 2 &&
+        position > lastPosition
       );
     });
 
-    // threadPosition が2以上なら、近い時刻の先行投稿を候補にする
-    if (position >= 2 && candidates.length > 0) {
-      candidates.sort((a, b) => date(b.root) - date(a.root));
+    if (candidates.length > 0) {
+      candidates.sort(
+        (a, b) => timestamp(b.root) - timestamp(a.root)
+      );
       candidates[0].replies.push(reply);
     } else {
       unmatched.push(reply);
@@ -171,65 +261,128 @@ export default function Home() {
   }
 
   return (
-    <main style={{ maxWidth: 760, margin: "24px auto", padding: 16, color: "#172033", fontFamily: "Arial, sans-serif" }}>
+    <main
+      style={{
+        maxWidth: 760,
+        margin: "24px auto",
+        padding: 16,
+        color: "#172033",
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
       <h1 style={{ fontSize: 32 }}>Threads Analyzer</h1>
-      <p>Threadsの投稿と連投候補を確認できます。</p>
+      <p>Threadsの投稿と連投候補をまとめて確認できます。</p>
 
-      <label htmlFor="profile-url">ThreadsプロフィールURL</label>
+      <label htmlFor="profile-url">
+        ThreadsプロフィールURL
+      </label>
+
       <input
         id="profile-url"
         type="url"
         value={url}
         onChange={(e) => setUrl(e.target.value)}
         placeholder="https://www.threads.com/@username"
-        style={{ display: "block", width: "100%", boxSizing: "border-box", padding: 14, margin: "10px 0", border: "1px solid #bbb", borderRadius: 8, fontSize: 16 }}
+        style={{
+          display: "block",
+          width: "100%",
+          boxSizing: "border-box",
+          padding: 14,
+          margin: "10px 0",
+          border: "1px solid #bbb",
+          borderRadius: 8,
+          fontSize: 16,
+        }}
       />
 
       <button
         onClick={analyze}
         disabled={loading}
-        style={{ padding: "13px 18px", border: 0, borderRadius: 8, background: "#2563eb", color: "white", fontSize: 16 }}
+        style={{
+          padding: "13px 18px",
+          border: 0,
+          borderRadius: 8,
+          background: "#2563eb",
+          color: "white",
+          fontSize: 16,
+          opacity: loading ? 0.7 : 1,
+        }}
       >
         {loading ? "取得中..." : "アカウントを分析する"}
       </button>
 
-      {error && <p style={{ color: "#b91c1c" }}>{error}</p>}
+      {error && (
+        <p role="alert" style={{ color: "#b91c1c" }}>
+          {error}
+        </p>
+      )}
 
       {result && (
         <section style={{ marginTop: 24 }}>
           <h2>取得結果</h2>
-          <p>{result.message}</p>
+          <p>{result.message || "取得処理が完了しました。"}</p>
           <p>プロフィール：{result.profileUrl}</p>
-          <p>通常投稿：{roots.length}件 ／ 本人の返信：{replies.length}件</p>
+          <p>
+            通常投稿：{roots.length}件 ／ 本人の返信：{replies.length}件
+          </p>
 
           <h2 style={{ marginTop: 28 }}>スレッド候補</h2>
-          <p style={{ color: "#666", fontSize: 14 }}>
-            投稿順・日時・threadPositionから推定しています。正確な親投稿を示すIDがない場合、紐づけは確定ではありません。
+
+          <p style={{ color: "#666", fontSize: 14, lineHeight: 1.6 }}>
+            投稿日時と threadPosition から推定しています。
+            親投稿のIDがない場合、紐づけは確定ではありません。
           </p>
 
           {groups.map((group, index) => (
-            <section key={String(group.root.id ?? index)} style={{ marginTop: 20 }}>
-              <Card post={group.root} title={`スレッド候補 ${index + 1} · 最初の投稿`} />
+            <section
+              key={String(group.root.id ?? index)}
+              style={{ marginTop: 20 }}
+            >
+              <PostCard
+                post={group.root}
+                title={`投稿 ${index + 1} · 最初の投稿`}
+              />
+
               {group.replies.map((reply, replyIndex) => (
-                <div key={String(reply.id ?? replyIndex)} style={{ marginLeft: 18, paddingLeft: 12, borderLeft: "3px solid #93c5fd" }}>
-                  <Card post={reply} title={`続きの投稿 ${replyIndex + 1}`} />
+                <div
+                  key={String(reply.id ?? replyIndex)}
+                  style={{
+                    marginLeft: 12,
+                    paddingLeft: 12,
+                    borderLeft: "3px solid #93c5fd",
+                  }}
+                >
+                  <PostCard
+                    post={reply}
+                    title={`続きの投稿 ${replyIndex + 1}`}
+                  />
                 </div>
               ))}
             </section>
           ))}
 
           {unmatched.length > 0 && (
-            <>
-              <h2 style={{ marginTop: 32 }}>紐づけできなかった返信</h2>
+            <section style={{ marginTop: 28 }}>
+              <h2>紐づけできなかった返信</h2>
               <p style={{ color: "#666", fontSize: 14 }}>
-                誤って別の投稿につなげないよう、候補が見つからない返信はここに分けています。
+                別の投稿に誤って紐づけないよう、候補がない返信は分けて表示しています。
               </p>
+
               {unmatched.map((reply, index) => (
-                <Card key={String(reply.id ?? index)} post={reply} title={`未分類の返信 ${index + 1}`} />
+                <PostCard
+                  key={String(reply.id ?? index)}
+                  post={reply}
+                  title={`未分類の返信 ${index + 1}`}
+                />
               ))}
-            </>
+            </section>
           )}
-          {result.note && <p style={{ color: "#666", marginTop: 20 }}>{result.note}</p>}
+
+          {result.note && (
+            <p style={{ color: "#666", marginTop: 20 }}>
+              {result.note}
+            </p>
+          )}
         </section>
       )}
     </main>
