@@ -17,10 +17,23 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const profileUrl = body.profileUrl;
+    const maxPosts = body.maxPosts ?? 500;
 
     if (typeof profileUrl !== "string") {
       return NextResponse.json(
         { error: "ThreadsプロフィールURLを入力してください。" },
+        { status: 400 }
+      );
+    }
+
+    if (
+      typeof maxPosts !== "number" ||
+      !Number.isInteger(maxPosts) ||
+      maxPosts < 1 ||
+      maxPosts > 5000
+    ) {
+      return NextResponse.json(
+        { error: "取得する投稿数は1〜5000の整数で指定してください。" },
         { status: 400 }
       );
     }
@@ -84,7 +97,7 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           mode: "posts",
           usernames: [username],
-          maxPostsPerProfile: 500,
+          maxPostsPerProfile: maxPosts,
           includeProfile: false,
         }),
         signal: AbortSignal.timeout(300000),
@@ -120,17 +133,21 @@ export async function POST(request: Request) {
         const author = getString(post, [
           "authorUsername",
           "username",
-        ]).replace(/^@/, "").toLowerCase();
+        ])
+          .replace(/^@/, "")
+          .toLowerCase();
 
         return !author || author === username.toLowerCase();
       })
-      .slice(0, 500);
+      .slice(0, maxPosts);
 
     const ownReplies = posts.filter((post) => {
       const author = getString(post, [
         "authorUsername",
         "username",
-      ]).replace(/^@/, "").toLowerCase();
+      ])
+        .replace(/^@/, "")
+        .toLowerCase();
 
       return author === username.toLowerCase() && post.isReply === true;
     });
@@ -140,13 +157,13 @@ export async function POST(request: Request) {
     );
 
     return NextResponse.json({
-      message: `最大500件を確認しました。親投稿：${mainPosts.length}件、本人の返信：${ownReplies.length}件`,
+      message: `最大${maxPosts}件を確認しました。親投稿：${mainPosts.length}件、本人の返信：${ownReplies.length}件`,
       profileUrl: url.origin + url.pathname,
       username,
       posts: mainPosts,
       ownReplies,
       note:
-        "親投稿と返信を合わせて最大500件を取得します。取得元データに返信が含まれない場合、本人の返信をすべて検出できないことがあります。",
+        `親投稿と返信を合わせて最大${maxPosts}件を取得する設定です。実際の取得件数は公開データや取得サービスの仕様によって変わります。取得元データに返信が含まれない場合、本人の返信をすべて検出できないことがあります。`,
     });
   } catch (error) {
     console.error("Analysis API error:", error);
