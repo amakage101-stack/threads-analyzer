@@ -17,21 +17,25 @@ type AnalysisResult = {
 function value(post: Post, keys: string[]): unknown {
   for (const key of keys) {
     const v = post[key];
-    if (v !== undefined && v !== null && v !== "") {
-      return v;
-    }
+    if (v !== undefined && v !== null && v !== "") return v;
   }
   return undefined;
 }
 
 function display(v: unknown): string {
-  if (v === undefined || v === null || v === "") {
-    return "不明";
-  }
-  if (typeof v === "object") {
-    return JSON.stringify(v);
-  }
+  if (v === undefined || v === null || v === "") return "不明";
+  if (typeof v === "object") return JSON.stringify(v);
   return String(v);
+}
+
+function numberValue(post: Post, keys: string[]): number {
+  const raw = value(post, keys);
+  if (typeof raw === "number") return raw;
+  if (typeof raw === "string") {
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
 }
 
 function postText(post: Post): string {
@@ -60,14 +64,28 @@ function timestamp(post: Post): number {
 
 function dateLabel(post: Post): string {
   const time = timestamp(post);
-  return time
-    ? new Date(time).toLocaleString("ja-JP")
-    : "日時不明";
+  return time ? new Date(time).toLocaleString("ja-JP") : "日時不明";
 }
 
 function postLink(post: Post): string {
   const v = value(post, ["url", "postUrl", "permalink", "link"]);
   return typeof v === "string" ? v : "";
+}
+
+function likes(post: Post): number {
+  return numberValue(post, ["likeCount", "likesCount", "likes"]);
+}
+
+function repliesCount(post: Post): number {
+  return numberValue(post, ["replyCount", "repliesCount", "commentsCount"]);
+}
+
+function reposts(post: Post): number {
+  return numberValue(post, ["repostCount", "repostsCount", "reshareCount"]);
+}
+
+function engagement(post: Post): number {
+  return likes(post) + repliesCount(post) + reposts(post);
 }
 
 function PostCard({
@@ -78,7 +96,6 @@ function PostCard({
   title: string;
 }) {
   const link = postLink(post);
-  const likes = value(post, ["likeCount", "likesCount", "likes"]);
 
   return (
     <article
@@ -93,16 +110,16 @@ function PostCard({
       }}
     >
       <h3 style={{ marginTop: 0 }}>{title}</h3>
-
       <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>
         {postText(post)}
       </p>
-
       <p style={{ color: "#666", fontSize: 13 }}>
         投稿日：{dateLabel(post)}
       </p>
-
-      <p>いいね：{display(likes)}</p>
+      <p>
+        いいね：{likes(post)}　返信：{repliesCount(post)}　リポスト：{reposts(post)}
+      </p>
+      <p>反応合計：{engagement(post)}</p>
 
       {link.startsWith("https://") && (
         <p>
@@ -150,16 +167,8 @@ export default function Home() {
       return;
     }
 
-    const validHost = [
-      "threads.net",
-      "www.threads.net",
-      "threads.com",
-      "www.threads.com",
-    ].includes(parsed.hostname);
-
     if (
-      !["https:", "http:"].includes(parsed.protocol) ||
-      !validHost ||
+      !["threads.net", "www.threads.net", "threads.com", "www.threads.com"].includes(parsed.hostname) ||
       !/^\/@[\w.]+\/?$/.test(parsed.pathname)
     ) {
       setError("有効なThreadsプロフィールURLを入力してください。");
@@ -171,12 +180,8 @@ export default function Home() {
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          profileUrl: url.trim(),
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profileUrl: url.trim() }),
       });
 
       const data: AnalysisResult = await response.json();
@@ -187,11 +192,7 @@ export default function Home() {
 
       setResult(data);
     } catch (e) {
-      setError(
-        e instanceof Error
-          ? e.message
-          : "通信エラーが発生しました。"
-      );
+      setError(e instanceof Error ? e.message : "通信エラーが発生しました。");
     } finally {
       setLoading(false);
     }
@@ -203,7 +204,6 @@ export default function Home() {
   const sortedRoots = [...roots].sort(
     (a, b) => timestamp(a) - timestamp(b)
   );
-
   const sortedReplies = [...replies].sort(
     (a, b) => timestamp(a) - timestamp(b)
   );
@@ -232,10 +232,7 @@ export default function Home() {
 
       const lastPosition = group.replies.reduce(
         (max, item) =>
-          Math.max(
-            max,
-            Number(value(item, ["threadPosition"]) ?? 0)
-          ),
+          Math.max(max, Number(value(item, ["threadPosition"]) ?? 0)),
         0
       );
 
@@ -251,14 +248,21 @@ export default function Home() {
     });
 
     if (candidates.length > 0) {
-      candidates.sort(
-        (a, b) => timestamp(b.root) - timestamp(a.root)
-      );
+      candidates.sort((a, b) => timestamp(b.root) - timestamp(a.root));
       candidates[0].replies.push(reply);
     } else {
       unmatched.push(reply);
     }
   }
+
+  const allPosts = [
+    ...roots.map((post) => ({ post, kind: "通常投稿" })),
+    ...replies.map((post) => ({ post, kind: "本人の返信" })),
+  ];
+
+  const rankedPosts = [...allPosts]
+    .sort((a, b) => engagement(b.post) - engagement(a.post))
+    .slice(0, 10);
 
   return (
     <main
@@ -271,12 +275,9 @@ export default function Home() {
       }}
     >
       <h1 style={{ fontSize: 32 }}>Threads Analyzer</h1>
-      <p>Threadsの投稿と連投候補をまとめて確認できます。</p>
+      <p>Threadsの投稿と反応を分析できます。</p>
 
-      <label htmlFor="profile-url">
-        ThreadsプロフィールURL
-      </label>
-
+      <label htmlFor="profile-url">ThreadsプロフィールURL</label>
       <input
         id="profile-url"
         type="url"
@@ -311,38 +312,60 @@ export default function Home() {
         {loading ? "取得中..." : "アカウントを分析する"}
       </button>
 
-      {error && (
-        <p role="alert" style={{ color: "#b91c1c" }}>
-          {error}
-        </p>
-      )}
+      {error && <p role="alert" style={{ color: "#b91c1c" }}>{error}</p>}
 
       {result && (
         <section style={{ marginTop: 24 }}>
           <h2>取得結果</h2>
           <p>{result.message || "取得処理が完了しました。"}</p>
           <p>プロフィール：{result.profileUrl}</p>
-          <p>
-            通常投稿：{roots.length}件 ／ 本人の返信：{replies.length}件
+          <p>通常投稿：{roots.length}件 ／ 本人の返信：{replies.length}件</p>
+
+          <h2 style={{ marginTop: 32 }}>反応ランキング TOP 10</h2>
+          <p style={{ color: "#666", fontSize: 14, lineHeight: 1.6 }}>
+            いいね・返信・リポストを単純合計して順位を付けています。
+            閲覧数や投稿後の経過時間は考慮していません。
           </p>
 
-          <h2 style={{ marginTop: 28 }}>スレッド候補</h2>
+          {rankedPosts.length === 0 && <p>ランキング対象の投稿がありません。</p>}
 
+          {rankedPosts.map((item, index) => (
+            <article
+              key={String(item.post.id ?? item.post.code ?? index)}
+              style={{
+                marginTop: 12,
+                padding: 16,
+                border: "1px solid #ddd",
+                borderRadius: 12,
+                background: "#fff",
+                overflowWrap: "anywhere",
+              }}
+            >
+              <h3 style={{ marginTop: 0 }}>
+                {index + 1}位　反応合計 {engagement(item.post)}
+              </h3>
+              <p style={{ color: "#666", fontSize: 13 }}>{item.kind}</p>
+              <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
+                {postText(item.post)}
+              </p>
+              <p>いいね：{likes(item.post)}　返信：{repliesCount(item.post)}　リポスト：{reposts(item.post)}</p>
+              {postLink(item.post).startsWith("https://") && (
+                <a href={postLink(item.post)} target="_blank" rel="noreferrer">
+                  Threadsで投稿を見る
+                </a>
+              )}
+            </article>
+          ))}
+
+          <h2 style={{ marginTop: 32 }}>スレッド候補</h2>
           <p style={{ color: "#666", fontSize: 14, lineHeight: 1.6 }}>
             投稿日時と threadPosition から推定しています。
             親投稿のIDがない場合、紐づけは確定ではありません。
           </p>
 
           {groups.map((group, index) => (
-            <section
-              key={String(group.root.id ?? index)}
-              style={{ marginTop: 20 }}
-            >
-              <PostCard
-                post={group.root}
-                title={`投稿 ${index + 1} · 最初の投稿`}
-              />
-
+            <section key={String(group.root.id ?? index)} style={{ marginTop: 20 }}>
+              <PostCard post={group.root} title={`投稿 ${index + 1} · 最初の投稿`} />
               {group.replies.map((reply, replyIndex) => (
                 <div
                   key={String(reply.id ?? replyIndex)}
@@ -352,10 +375,7 @@ export default function Home() {
                     borderLeft: "3px solid #93c5fd",
                   }}
                 >
-                  <PostCard
-                    post={reply}
-                    title={`続きの投稿 ${replyIndex + 1}`}
-                  />
+                  <PostCard post={reply} title={`続きの投稿 ${replyIndex + 1}`} />
                 </div>
               ))}
             </section>
@@ -364,10 +384,6 @@ export default function Home() {
           {unmatched.length > 0 && (
             <section style={{ marginTop: 28 }}>
               <h2>紐づけできなかった返信</h2>
-              <p style={{ color: "#666", fontSize: 14 }}>
-                別の投稿に誤って紐づけないよう、候補がない返信は分けて表示しています。
-              </p>
-
               {unmatched.map((reply, index) => (
                 <PostCard
                   key={String(reply.id ?? index)}
@@ -378,11 +394,7 @@ export default function Home() {
             </section>
           )}
 
-          {result.note && (
-            <p style={{ color: "#666", marginTop: 20 }}>
-              {result.note}
-            </p>
-          )}
+          {result.note && <p style={{ color: "#666", marginTop: 20 }}>{result.note}</p>}
         </section>
       )}
     </main>
