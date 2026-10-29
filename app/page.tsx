@@ -9,6 +9,7 @@ type AnalysisResult = {
   message?: string;
   error?: string;
   profileUrl?: string;
+  username?: string;
   posts?: Post[];
   ownReplies?: Post[];
   note?: string;
@@ -183,7 +184,7 @@ export default function Home() {
     }
   }
 
-  // 分析対象は親投稿のみ。返信の反応数は分析に加算しない。
+  // 分析対象は親投稿のみ。
   const roots = [...(result?.posts ?? [])].sort(
     (a, b) => timestamp(a) - timestamp(b)
   );
@@ -204,7 +205,7 @@ export default function Home() {
     const reference = parentReference(reply);
     let matched = -1;
 
-    // 親投稿IDが取得できていれば、IDで紐づける。
+    // 親投稿IDがあればIDで紐づける。
     if (reference) {
       matched = groups.findIndex((group, index) => {
         const rootId = String(
@@ -220,7 +221,7 @@ export default function Home() {
       });
     }
 
-    // 親投稿IDがない場合は、同じ本人・時刻・threadPositionから推定する。
+    // 親投稿IDがなければ、時刻などから候補を推定する。
     if (matched < 0) {
       const replyTime = timestamp(reply);
       const position = numberValue(reply, ["threadPosition"]);
@@ -259,7 +260,6 @@ export default function Home() {
     }
   }
 
-  // 全体集計も親投稿のみ。
   const totalLikes = roots.reduce((sum, post) => sum + likes(post), 0);
   const totalReplies = roots.reduce(
     (sum, post) => sum + repliesCount(post),
@@ -273,6 +273,136 @@ export default function Home() {
   const rankedRoots = [...roots].sort(
     (a, b) => engagement(b) - engagement(a)
   );
+
+  // 取得済みの結果をTXTに書き出す。Apifyの再実行はしない。
+  function downloadTxt() {
+    if (!result) return;
+
+    const lines: string[] = [];
+
+    lines.push("Threads Analyzer - 分析結果");
+    lines.push(`プロフィール: ${result.profileUrl ?? url}`);
+    lines.push(`ユーザー名: ${result.username ?? "不明"}`);
+    lines.push(`出力日時: ${new Date().toLocaleString("ja-JP")}`);
+    lines.push("");
+    lines.push("========================================");
+    lines.push("【取得結果の概要】");
+    lines.push(result.message ?? "");
+    lines.push(`親投稿数: ${roots.length}`);
+    lines.push(`本人の返信数: ${replies.length}`);
+    lines.push(`未紐づけ返信数: ${unmatched.length}`);
+    lines.push("");
+    lines.push("【親投稿全体の集計】");
+    lines.push(`いいね合計: ${totalLikes}`);
+    lines.push(`返信数合計: ${totalReplies}`);
+    lines.push(`リポスト合計: ${totalReposts}`);
+    lines.push(`反応合計: ${totalLikes + totalReplies + totalReposts}`);
+    lines.push("※集計・ランキングの対象は親投稿のみです。");
+    lines.push("※反応合計はいいね・返信・リポストの単純合計です。");
+    lines.push("========================================");
+
+    groups.forEach((group, index) => {
+      const post = group.root;
+      const rank = rankedRoots.findIndex((item) => item === post) + 1;
+
+      lines.push("");
+      lines.push(`【親投稿 ${index + 1}】`);
+      lines.push(`投稿日: ${dateLabel(post)}`);
+      lines.push(`本文:\n${postText(post)}`);
+      lines.push(`URL: ${postLink(post) || "不明"}`);
+      lines.push("");
+      lines.push("【この投稿の分析】");
+      lines.push(`いいね: ${likes(post)}`);
+      lines.push(`返信: ${repliesCount(post)}`);
+      lines.push(`リポスト: ${reposts(post)}`);
+      lines.push(`反応合計: ${engagement(post)}`);
+      lines.push(`反応ランキング: ${rank}位 / ${roots.length}件`);
+      lines.push("");
+      lines.push(`【この親投稿に紐づく本人の返信: ${group.replies.length}件】`);
+
+      const sortedGroupReplies = [...group.replies].sort(
+        (a, b) => timestamp(a) - timestamp(b)
+      );
+
+      sortedGroupReplies.forEach((reply, replyIndex) => {
+        lines.push("");
+        lines.push(`--- 本人の返信 ${replyIndex + 1} ---`);
+        lines.push(`投稿日: ${dateLabel(reply)}`);
+        lines.push(`本文:\n${postText(reply)}`);
+        lines.push(`URL: ${postLink(reply) || "不明"}`);
+      });
+
+      lines.push("");
+      lines.push("【親投稿の取得元データ（JSON）】");
+      lines.push(JSON.stringify(post, null, 2));
+
+      if (sortedGroupReplies.length > 0) {
+        lines.push("");
+        lines.push("【紐づいた返信の取得元データ（JSON）】");
+        lines.push(JSON.stringify(sortedGroupReplies, null, 2));
+      }
+
+      lines.push("");
+      lines.push("========================================");
+    });
+
+    if (unmatched.length > 0) {
+      lines.push("");
+      lines.push(`【親投稿に紐づけできなかった本人の返信: ${unmatched.length}件】`);
+
+      unmatched.forEach((reply, index) => {
+        lines.push("");
+        lines.push(`--- 未紐づけ返信 ${index + 1} ---`);
+        lines.push(`投稿日: ${dateLabel(reply)}`);
+        lines.push(`本文:\n${postText(reply)}`);
+        lines.push(`URL: ${postLink(reply) || "不明"}`);
+        lines.push("取得元データ（JSON）:");
+        lines.push(JSON.stringify(reply, null, 2));
+      });
+    }
+
+    if (result.note) {
+      lines.push("");
+      lines.push("【注意事項】");
+      lines.push(result.note);
+    }
+
+    // 取得データ全体も収録し、画面表示以外のフィールドも保存する。
+    lines.push("");
+    lines.push("========================================");
+    lines.push("【取得データ全体（JSON）】");
+    lines.push(JSON.stringify({
+      profileUrl: result.profileUrl,
+      username: result.username,
+      posts: result.posts ?? [],
+      ownReplies: result.ownReplies ?? [],
+      note: result.note,
+    }, null, 2));
+
+    const blob = new Blob(
+      ["\uFEFF" + lines.join("\n")],
+      { type: "text/plain;charset=utf-8" }
+    );
+
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const username =
+      result.username ??
+      result.profileUrl?.match(/@([\w.]+)/)?.[1] ??
+      "threads";
+
+    link.href = downloadUrl;
+    link.download = `threads-analysis-${username}-${new Date()
+      .toISOString()
+      .slice(0, 10)}.txt`;
+
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    // ダウンロード開始後にURLを解放する。
+    window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+  }
 
   return (
     <main
@@ -340,6 +470,28 @@ export default function Home() {
           <p>プロフィール：{result.profileUrl}</p>
           <p>
             親投稿：{roots.length}件 ／ 本人の返信：{replies.length}件
+          </p>
+
+          <button
+            onClick={downloadTxt}
+            style={{
+              marginTop: 12,
+              padding: "14px 18px",
+              border: 0,
+              borderRadius: 8,
+              background: "#15803d",
+              color: "white",
+              fontSize: 16,
+              fontWeight: "bold",
+              cursor: "pointer",
+              width: "100%",
+            }}
+          >
+            TXTですべての結果をダウンロード
+          </button>
+
+          <p style={{ color: "#666", fontSize: 13 }}>
+            親投稿・分析・返信・取得元データを1つのTXTファイルに保存します。
           </p>
 
           <section
