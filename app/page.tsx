@@ -346,16 +346,6 @@ export default function Home() {
       });
 
       lines.push("");
-      lines.push("【親投稿の取得元データ（JSON）】");
-      lines.push(JSON.stringify(post, null, 2));
-
-      if (sortedGroupReplies.length > 0) {
-        lines.push("");
-        lines.push("【紐づいた返信の取得元データ（JSON）】");
-        lines.push(JSON.stringify(sortedGroupReplies, null, 2));
-      }
-
-      lines.push("");
       lines.push("========================================");
     });
 
@@ -369,8 +359,6 @@ export default function Home() {
         lines.push(`投稿日: ${dateLabel(reply)}`);
         lines.push(`本文:\n${postText(reply)}`);
         lines.push(`URL: ${postLink(reply) || "不明"}`);
-        lines.push("取得元データ（JSON）:");
-        lines.push(JSON.stringify(reply, null, 2));
       });
     }
 
@@ -379,18 +367,6 @@ export default function Home() {
       lines.push("【注意事項】");
       lines.push(result.note);
     }
-
-    // 取得データ全体も収録し、画面表示以外のフィールドも保存する。
-    lines.push("");
-    lines.push("========================================");
-    lines.push("【取得データ全体（JSON）】");
-    lines.push(JSON.stringify({
-      profileUrl: result.profileUrl,
-      username: result.username,
-      posts: result.posts ?? [],
-      ownReplies: result.ownReplies ?? [],
-      note: result.note,
-    }, null, 2));
 
     const blob = new Blob(
       ["\uFEFF" + lines.join("\n")],
@@ -533,7 +509,7 @@ export default function Home() {
           </button>
 
           <p style={{ color: "#666", fontSize: 13 }}>
-            親投稿・分析・返信・取得元データを1つのTXTファイルに保存します。
+            親投稿・分析・返信を1つのTXTファイルに保存します。
           </p>
 
           <section
