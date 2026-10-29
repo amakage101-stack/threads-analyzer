@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 
 type Post = Record<string, unknown>;
@@ -36,7 +37,12 @@ export async function POST(request: Request) {
     }
 
     if (
-      !["threads.net", "www.threads.net", "threads.com", "www.threads.com"].includes(url.hostname) ||
+      ![
+        "threads.net",
+        "www.threads.net",
+        "threads.com",
+        "www.threads.com",
+      ].includes(url.hostname) ||
       !/^\/@[\w.]+\/?$/.test(url.pathname) ||
       !["https:", "http:"].includes(url.protocol)
     ) {
@@ -67,7 +73,6 @@ export async function POST(request: Request) {
     const endpoint =
       "https://api.apify.com/v2/acts/varnmill~threads-scraper/run-sync-get-dataset-items";
 
-    // まずプロフィール投稿を最大10件取得
     const response = await fetch(
       `${endpoint}?token=${encodeURIComponent(token)}`,
       {
@@ -79,10 +84,10 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           mode: "posts",
           usernames: [username],
-          maxPostsPerProfile: 10,
+          maxPostsPerProfile: 500,
           includeProfile: false,
         }),
-        signal: AbortSignal.timeout(240000),
+        signal: AbortSignal.timeout(300000),
         cache: "no-store",
       }
     );
@@ -119,19 +124,15 @@ export async function POST(request: Request) {
 
         return !author || author === username.toLowerCase();
       })
-      .slice(0, 10);
+      .slice(0, 500);
 
-    // この段階では追加のApify実行をせず、
-    // 取得済みデータに含まれる返信情報から本人の連投を探す
     const ownReplies = posts.filter((post) => {
       const author = getString(post, [
         "authorUsername",
         "username",
       ]).replace(/^@/, "").toLowerCase();
 
-      const isReply = post.isReply === true;
-
-      return author === username.toLowerCase() && isReply;
+      return author === username.toLowerCase() && post.isReply === true;
     });
 
     const mainPosts = posts.filter(
@@ -139,13 +140,13 @@ export async function POST(request: Request) {
     );
 
     return NextResponse.json({
-      message: `最大10件を確認しました。本人の返信投稿として識別できた件数：${ownReplies.length}件`,
+      message: `最大500件を確認しました。親投稿：${mainPosts.length}件、本人の返信：${ownReplies.length}件`,
       profileUrl: url.origin + url.pathname,
       username,
       posts: mainPosts,
       ownReplies,
       note:
-        "取得データに返信投稿が含まれない場合、本人の連投をすべて検出できないことがあります。追加取得はまだ実行していません。",
+        "親投稿と返信を合わせて最大500件を取得します。取得元データに返信が含まれない場合、本人の返信をすべて検出できないことがあります。",
     });
   } catch (error) {
     console.error("Analysis API error:", error);
@@ -154,7 +155,7 @@ export async function POST(request: Request) {
       {
         error:
           error instanceof Error && error.name === "TimeoutError"
-            ? "投稿取得がタイムアウトしました。時間をおいて再試行してください。"
+            ? "投稿取得がタイムアウトしました。投稿数が多い可能性があります。時間をおいて再試行してください。"
             : "投稿取得中にエラーが発生しました。",
       },
       { status: 500 }
