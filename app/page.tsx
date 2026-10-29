@@ -129,6 +129,7 @@ function PostContent({ post }: { post: Post }) {
 
 export default function Home() {
   const [url, setUrl] = useState("");
+  const [maxPosts, setMaxPosts] = useState(500);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -159,13 +160,25 @@ export default function Home() {
       return;
     }
 
+    if (
+      !Number.isInteger(maxPosts) ||
+      maxPosts < 1 ||
+      maxPosts > 5000
+    ) {
+      setError("取得する投稿数は1〜5000の整数で入力してください。");
+      return;
+    }
+
     setLoading(true);
 
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ profileUrl: url.trim() }),
+        body: JSON.stringify({
+          profileUrl: url.trim(),
+          maxPosts,
+        }),
       });
 
       const data: AnalysisResult = await response.json();
@@ -440,6 +453,35 @@ export default function Home() {
         }}
       />
 
+      <label htmlFor="max-posts">取得する投稿数</label>
+
+      <input
+        id="max-posts"
+        type="number"
+        min={1}
+        max={5000}
+        step={1}
+        value={maxPosts}
+        onChange={(e) => {
+          const inputValue = e.target.value;
+          setMaxPosts(inputValue === "" ? 0 : Number(inputValue));
+        }}
+        style={{
+          display: "block",
+          width: "100%",
+          boxSizing: "border-box",
+          padding: 14,
+          margin: "10px 0",
+          border: "1px solid #bbb",
+          borderRadius: 8,
+          fontSize: 16,
+        }}
+      />
+
+      <p style={{ color: "#666", fontSize: 13, marginTop: 0 }}>
+        1〜5000件。デフォルトは500件です。実際の取得件数は公開データや取得サービスの仕様により変わる場合があります。
+      </p>
+
       <button
         onClick={analyze}
         disabled={loading}
@@ -577,7 +619,7 @@ export default function Home() {
                     紐づけできた返信はありません。
                   </p>
                 ) : (
-                  group.replies
+                  [...group.replies]
                     .sort((a, b) => timestamp(a) - timestamp(b))
                     .map((reply, replyIndex) => (
                       <article
