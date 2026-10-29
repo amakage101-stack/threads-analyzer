@@ -1,5 +1,16 @@
-
 import { NextResponse } from "next/server";
+
+type Post = Record<string, unknown>;
+
+function getString(post: Post, keys: string[]): string {
+  for (const key of keys) {
+    const value = post[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
 
 export async function POST(request: Request) {
   try {
@@ -25,17 +36,12 @@ export async function POST(request: Request) {
     }
 
     if (
-      !["threads.net", "www.threads.net", "threads.com", "www.threads.com"].includes(
-        url.hostname
-      ) ||
+      !["threads.net", "www.threads.net", "threads.com", "www.threads.com"].includes(url.hostname) ||
       !/^\/@[\w.]+\/?$/.test(url.pathname) ||
       !["https:", "http:"].includes(url.protocol)
     ) {
       return NextResponse.json(
-        {
-          error:
-            "有効なThreadsプロフィールURLを入力してください。",
-        },
+        { error: "有効なThreadsプロフィールURLを入力してください。" },
         { status: 400 }
       );
     }
@@ -49,8 +55,21 @@ export async function POST(request: Request) {
       );
     }
 
+    const username = url.pathname.match(/^\/@([\w.]+)/)?.[1];
+
+    if (!username) {
+      return NextResponse.json(
+        { error: "ユーザー名を読み取れませんでした。" },
+        { status: 400 }
+      );
+    }
+
+    const endpoint =
+      "https://api.apify.com/v2/acts/varnmill~threads-scraper/run-sync-get-dataset-items";
+
+    // まずプロフィール投稿を最大10件取得
     const response = await fetch(
-      `https://api.apify.com/v2/acts/varnmill~threads-scraper/run-sync-get-dataset-items?token=${encodeURIComponent(token)}`,
+      `${endpoint}?token=${encodeURIComponent(token)}`,
       {
         method: "POST",
         headers: {
@@ -59,9 +78,9 @@ export async function POST(request: Request) {
         },
         body: JSON.stringify({
           mode: "posts",
-          usernames: [url.origin + url.pathname],
-          maxPostsPerProfile: 100,
-          includeProfile: true,
+          usernames: [username],
+          maxPostsPerProfile: 10,
+          includeProfile: false,
         }),
         signal: AbortSignal.timeout(240000),
         cache: "no-store",
@@ -82,19 +101,51 @@ export async function POST(request: Request) {
       );
     }
 
-    const posts = await response.json();
+    const data: unknown = await response.json();
 
-    if (!Array.isArray(posts)) {
+    if (!Array.isArray(data)) {
       return NextResponse.json(
         { error: "Apifyから予期しないデータが返されました。" },
         { status: 502 }
       );
     }
 
+    const posts = (data as Post[])
+      .filter((post) => {
+        const author = getString(post, [
+          "authorUsername",
+          "username",
+        ]).replace(/^@/, "").toLowerCase();
+
+        return !author || author === username.toLowerCase();
+      })
+      .slice(0, 10);
+
+    // この段階では追加のApify実行をせず、
+    // 取得済みデータに含まれる返信情報から本人の連投を探す
+    const ownReplies = posts.filter((post) => {
+      const author = getString(post, [
+        "authorUsername",
+        "username",
+      ]).replace(/^@/, "").toLowerCase();
+
+      const isReply = post.isReply === true;
+
+      return author === username.toLowerCase() && isReply;
+    });
+
+    const mainPosts = posts.filter(
+      (post) => post.isReply !== true
+    );
+
     return NextResponse.json({
-      message: `${posts.length}件のデータを取得しました。`,
+      message: `最大10件を確認しました。本人の返信投稿として識別できた件数：${ownReplies.length}件`,
       profileUrl: url.origin + url.pathname,
-      posts,
+      username,
+      posts: mainPosts,
+      ownReplies,
+      note:
+        "取得データに返信投稿が含まれない場合、本人の連投をすべて検出できないことがあります。追加取得はまだ実行していません。",
     });
   } catch (error) {
     console.error("Analysis API error:", error);
@@ -103,7 +154,7 @@ export async function POST(request: Request) {
       {
         error:
           error instanceof Error && error.name === "TimeoutError"
-            ? "投稿取得がタイムアウトしました。投稿数を減らして再試行してください。"
+            ? "投稿取得がタイムアウトしました。時間をおいて再試行してください。"
             : "投稿取得中にエラーが発生しました。",
       },
       { status: 500 }
