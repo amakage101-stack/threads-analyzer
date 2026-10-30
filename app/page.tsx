@@ -110,6 +110,7 @@ function reposts(post: Post): number {
     "repostsCount",
     "reshareCount",
     "retweetCount",
+    "retweets",
   ]);
 }
 
@@ -119,8 +120,13 @@ function engagement(post: Post): number {
 
 function postKey(post: Post, fallback: number): string {
   return String(
-    value(post, ["id", "postId", "code", "tweetId", "rest_id"]) ??
-      fallback
+    value(post, [
+      "id",
+      "postId",
+      "code",
+      "tweetId",
+      "rest_id",
+    ]) ?? fallback
   );
 }
 
@@ -164,20 +170,43 @@ function authorName(post: Post): string {
     .toLowerCase();
 }
 
+// XではconversationIdを使って会話の起点となる親投稿を探す。
 function parentReference(post: Post): string {
-  return String(
-    value(post, [
-      "parentPostId",
-      "parentId",
-      "replyToPostId",
-      "inReplyToId",
-      "inReplyToStatusId",
-      "inReplyToTweetId",
-      "replyToTweetId",
-      "in_reply_to_status_id_str",
-      "in_reply_to_status_id",
-      "rootPostId",
-    ]) ?? ""
+  const directReference = value(post, [
+    "parentPostId",
+    "parentId",
+    "replyToPostId",
+    "inReplyToId",
+    "inReplyToStatusId",
+    "inReplyToStatusIdStr",
+    "inReplyToTweetId",
+    "replyToTweetId",
+    "in_reply_to_status_id_str",
+    "in_reply_to_status_id",
+    "rootPostId",
+  ]);
+
+  if (directReference !== undefined) {
+    return String(directReference);
+  }
+
+  return String(value(post, ["conversationId"]) ?? "");
+}
+
+function isReplyPost(post: Post): boolean {
+  return (
+    post.isReply === true ||
+    Boolean(
+      value(post, [
+        "inReplyToStatusId",
+        "inReplyToStatusIdStr",
+        "inReplyToTweetId",
+        "inReplyToId",
+        "replyToTweetId",
+        "in_reply_to_status_id",
+        "in_reply_to_status_id_str",
+      ])
+    )
   );
 }
 
@@ -272,9 +301,9 @@ export default function Home() {
     if (
       !Number.isInteger(maxPosts) ||
       maxPosts < 1 ||
-      maxPosts > 5000
+      maxPosts > 1500
     ) {
-      setError("取得する投稿数は1〜5000の整数で入力してください。");
+      setError("取得する投稿数は1〜1500の整数で入力してください。");
       return;
     }
 
@@ -309,7 +338,6 @@ export default function Home() {
     }
   }
 
-  // 分析対象は親投稿のみ。
   const roots = [...(result?.posts ?? [])].sort(
     (a, b) => timestamp(a) - timestamp(b)
   );
@@ -330,7 +358,7 @@ export default function Home() {
     const reference = parentReference(reply);
     let matched = -1;
 
-    // 親投稿IDがあればIDで紐づける。
+    // X：返信先IDまたはconversationIdで親投稿を探す。
     if (reference) {
       matched = groups.findIndex((group, index) => {
         const rootId = String(
@@ -344,17 +372,20 @@ export default function Home() {
         );
 
         const rootCode = String(value(group.root, ["code"]) ?? "");
+        const rootConversationId = String(
+          value(group.root, ["conversationId"]) ?? ""
+        );
 
         return (
           reference === rootId ||
           reference === rootCode ||
+          reference === rootConversationId ||
           reference === postKey(group.root, index)
         );
       });
     }
 
-    // 親投稿IDがなければ、Threads用の条件で推定する。
-    // Xでは誤った紐づけを避けるため、IDがない返信は未紐づけにする。
+    // Threads：従来の時間・投稿順による推定を維持。
     if (matched < 0 && platform === "threads") {
       const replyTime = timestamp(reply);
       const position = numberValue(reply, ["threadPosition"]);
@@ -409,7 +440,6 @@ export default function Home() {
     (a, b) => engagement(b) - engagement(a)
   );
 
-  // 取得済みの結果をTXTに書き出す。Apifyの再実行はしない。
   function downloadTxt() {
     if (!result) return;
 
@@ -609,7 +639,7 @@ export default function Home() {
         id="max-posts"
         type="number"
         min={1}
-        max={5000}
+        max={1500}
         step={1}
         value={maxPosts}
         onChange={(e) => {
@@ -629,7 +659,7 @@ export default function Home() {
       />
 
       <p style={{ color: "#666", fontSize: 13, marginTop: 0 }}>
-        1〜5000件。デフォルトは500件です。実際の取得件数は公開データや取得サービスの仕様により変わる場合があります。
+        1〜1500件。デフォルトは500件です。実際の取得件数は公開データや取得サービスの仕様により変わる場合があります。
       </p>
 
       <button
