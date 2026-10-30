@@ -21,6 +21,7 @@ function getAuthorUsername(post: Post): string {
     "username",
     "userName",
     "screenName",
+    "screen_name",
   ]);
 
   if (direct) {
@@ -48,9 +49,12 @@ function isReply(post: Post): boolean {
     post.isReply === true ||
     Boolean(
       post.inReplyToStatusId ||
+      post.inReplyToStatusIdStr ||
       post.inReplyToTweetId ||
       post.inReplyToId ||
-      post.replyToTweetId
+      post.replyToTweetId ||
+      post.in_reply_to_status_id ||
+      post.in_reply_to_status_id_str
     )
   );
 }
@@ -73,10 +77,10 @@ export async function POST(request: Request) {
       typeof maxPosts !== "number" ||
       !Number.isInteger(maxPosts) ||
       maxPosts < 1 ||
-      maxPosts > 5000
+      maxPosts > 1500
     ) {
       return NextResponse.json(
-        { error: "取得する投稿数は1〜5000の整数で指定してください。" },
+        { error: "取得する投稿数は1〜1500の整数で指定してください。" },
         { status: 400 }
       );
     }
@@ -129,7 +133,7 @@ export async function POST(request: Request) {
     }
 
     const endpoint =
-      "https://api.apify.com/v2/acts/apidojo~tweet-scraper/run-sync-get-dataset-items";
+      "https://api.apify.com/v2/acts/himanshu-data~x-twitter-scraper/run-sync-get-dataset-items";
 
     const response = await fetch(endpoint, {
       method: "POST",
@@ -139,9 +143,10 @@ export async function POST(request: Request) {
         Accept: "application/json",
       },
       body: JSON.stringify({
-        twitterHandles: [username],
+        profiles: [username],
+        includeProfileReplies: true,
         maxItems: maxPosts,
-        sort: "Latest",
+        maxTotalItems: maxPosts,
       }),
       signal: AbortSignal.timeout(300000),
       cache: "no-store",
@@ -155,7 +160,7 @@ export async function POST(request: Request) {
           error:
             response.status === 401 || response.status === 403
               ? "Apifyの認証に失敗しました。APIトークンを確認してください。"
-              : "Apifyで投稿を取得できませんでした。時間をおいて再試行してください。",
+              : "Apifyで投稿を取得できませんでした。Actorの設定や利用状況を確認してください。",
         },
         { status: 502 }
       );
@@ -170,16 +175,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const allPosts = (data as Post[])
-      .filter((post) => {
-        const author = getAuthorUsername(post);
+    const allPosts = (data as Post[]).filter((post) => {
+      const author = getAuthorUsername(post);
 
-        return (
-          !author ||
-          author === username.toLowerCase()
-        );
-      })
-      .slice(0, maxPosts);
+      return !author || author === username.toLowerCase();
+    });
 
     const ownReplies = allPosts.filter(
       (post) =>
@@ -193,13 +193,13 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       message:
-        `最大${maxPosts}件を確認しました。親投稿：${mainPosts.length}件、本人の返信：${ownReplies.length}件`,
+        `取得完了。親投稿：${mainPosts.length}件、本人の返信：${ownReplies.length}件`,
       profileUrl: `https://x.com/${username}`,
       username,
       posts: mainPosts,
       ownReplies,
       note:
-        `親投稿と返信を合わせて最大${maxPosts}件を取得する設定です。実際の取得件数は公開データや取得サービスの仕様によって変わります。取得元データに返信情報が含まれない場合、本人の返信をすべて検出できないことがあります。`,
+        `取得上限は親投稿と本人の返信を合わせて最大${maxPosts}件です。実際の取得件数はActorの仕様、公開データ、利用プランによって変わります。返信の親投稿IDが取得できない場合、画面上で親投稿に紐づけられないことがあります。`,
     });
   } catch (error) {
     console.error("X Analysis API error:", error);
@@ -209,7 +209,7 @@ export async function POST(request: Request) {
         error:
           error instanceof Error &&
           error.name === "TimeoutError"
-            ? "投稿取得がタイムアウトしました。投稿数が多い可能性があります。時間をおいて再試行してください。"
+            ? "投稿取得がタイムアウトしました。時間をおいて再試行してください。"
             : "投稿取得中にエラーが発生しました。",
       },
       { status: 500 }
