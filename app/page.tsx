@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 
+type Platform = "threads" | "x";
 type Post = Record<string, unknown>;
 
 type AnalysisResult = {
@@ -34,13 +35,26 @@ function numberValue(post: Post, keys: string[]): number {
 }
 
 function postText(post: Post): string {
-  const v = value(post, ["text", "caption", "content", "body"]);
+  const v = value(post, [
+    "text",
+    "fullText",
+    "full_text",
+    "caption",
+    "content",
+    "body",
+  ]);
+
   if (v === undefined || v === null || v === "") return "本文なし";
   return typeof v === "object" ? JSON.stringify(v) : String(v);
 }
 
 function timestamp(post: Post): number {
-  const raw = value(post, ["createdAt", "created_at", "timestamp"]);
+  const raw = value(post, [
+    "createdAt",
+    "created_at",
+    "timestamp",
+    "date",
+  ]);
 
   if (typeof raw === "number") {
     return raw < 1e12 ? raw * 1000 : raw;
@@ -63,20 +77,40 @@ function dateLabel(post: Post): string {
 }
 
 function postLink(post: Post): string {
-  const v = value(post, ["url", "postUrl", "permalink", "link"]);
+  const v = value(post, [
+    "url",
+    "postUrl",
+    "permalink",
+    "link",
+    "tweetUrl",
+  ]);
   return typeof v === "string" ? v : "";
 }
 
 function likes(post: Post): number {
-  return numberValue(post, ["likeCount", "likesCount", "likes"]);
+  return numberValue(post, [
+    "likeCount",
+    "likesCount",
+    "likes",
+    "favoriteCount",
+  ]);
 }
 
 function repliesCount(post: Post): number {
-  return numberValue(post, ["replyCount", "repliesCount", "commentsCount"]);
+  return numberValue(post, [
+    "replyCount",
+    "repliesCount",
+    "commentsCount",
+  ]);
 }
 
 function reposts(post: Post): number {
-  return numberValue(post, ["repostCount", "repostsCount", "reshareCount"]);
+  return numberValue(post, [
+    "repostCount",
+    "repostsCount",
+    "reshareCount",
+    "retweetCount",
+  ]);
 }
 
 function engagement(post: Post): number {
@@ -84,11 +118,48 @@ function engagement(post: Post): number {
 }
 
 function postKey(post: Post, fallback: number): string {
-  return String(value(post, ["id", "postId", "code"]) ?? fallback);
+  return String(
+    value(post, ["id", "postId", "code", "tweetId", "rest_id"]) ??
+      fallback
+  );
 }
 
 function authorName(post: Post): string {
-  return String(value(post, ["authorUsername", "username"]) ?? "")
+  const direct = value(post, [
+    "authorUsername",
+    "username",
+    "screenName",
+    "screen_name",
+    "userName",
+    "handle",
+  ]);
+
+  const author = post.author;
+  const user = post.user;
+
+  const nested =
+    typeof author === "object" && author !== null
+      ? value(author as Post, [
+          "username",
+          "userName",
+          "screenName",
+          "screen_name",
+          "handle",
+        ])
+      : undefined;
+
+  const nestedUser =
+    typeof user === "object" && user !== null
+      ? value(user as Post, [
+          "username",
+          "userName",
+          "screenName",
+          "screen_name",
+          "handle",
+        ])
+      : undefined;
+
+  return String(direct ?? nested ?? nestedUser ?? "")
     .replace(/^@/, "")
     .toLowerCase();
 }
@@ -100,12 +171,23 @@ function parentReference(post: Post): string {
       "parentId",
       "replyToPostId",
       "inReplyToId",
+      "inReplyToStatusId",
+      "inReplyToTweetId",
+      "replyToTweetId",
+      "in_reply_to_status_id_str",
+      "in_reply_to_status_id",
       "rootPostId",
     ]) ?? ""
   );
 }
 
-function PostContent({ post }: { post: Post }) {
+function PostContent({
+  post,
+  platform,
+}: {
+  post: Post;
+  platform: Platform;
+}) {
   const link = postLink(post);
 
   return (
@@ -113,13 +195,15 @@ function PostContent({ post }: { post: Post }) {
       <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>
         {postText(post)}
       </p>
+
       <p style={{ color: "#666", fontSize: 13 }}>
         投稿日：{dateLabel(post)}
       </p>
+
       {link.startsWith("https://") && (
         <p>
           <a href={link} target="_blank" rel="noreferrer">
-            Threadsで投稿を見る
+            {platform === "x" ? "Xで投稿を見る" : "Threadsで投稿を見る"}
           </a>
         </p>
       )}
@@ -128,11 +212,21 @@ function PostContent({ post }: { post: Post }) {
 }
 
 export default function Home() {
+  const [platform, setPlatform] = useState<Platform>("threads");
   const [url, setUrl] = useState("");
   const [maxPosts, setMaxPosts] = useState(500);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const serviceName = platform === "x" ? "X" : "Threads";
+
+  function changePlatform(nextPlatform: Platform) {
+    setPlatform(nextPlatform);
+    setUrl("");
+    setResult(null);
+    setError("");
+  }
 
   async function analyze() {
     setError("");
@@ -143,21 +237,36 @@ export default function Home() {
     try {
       parsed = new URL(url.trim());
     } catch {
-      setError("ThreadsのプロフィールURLを正しく入力してください。");
+      setError(`${serviceName}のプロフィールURLを正しく入力してください。`);
       return;
     }
 
-    if (
-      ![
-        "threads.net",
-        "www.threads.net",
-        "threads.com",
-        "www.threads.com",
-      ].includes(parsed.hostname) ||
-      !/^\/@[\w.]+\/?$/.test(parsed.pathname)
-    ) {
-      setError("有効なThreadsプロフィールURLを入力してください。");
-      return;
+    if (platform === "threads") {
+      if (
+        ![
+          "threads.net",
+          "www.threads.net",
+          "threads.com",
+          "www.threads.com",
+        ].includes(parsed.hostname) ||
+        !/^\/@[\w.]+\/?$/.test(parsed.pathname)
+      ) {
+        setError("有効なThreadsプロフィールURLを入力してください。");
+        return;
+      }
+    } else {
+      if (
+        ![
+          "x.com",
+          "www.x.com",
+          "twitter.com",
+          "www.twitter.com",
+        ].includes(parsed.hostname) ||
+        !/^\/[A-Za-z0-9_]{1,15}\/?$/.test(parsed.pathname)
+      ) {
+        setError("有効なXプロフィールURLを入力してください。");
+        return;
+      }
     }
 
     if (
@@ -172,7 +281,10 @@ export default function Home() {
     setLoading(true);
 
     try {
-      const response = await fetch("/api/analyze", {
+      const endpoint =
+        platform === "x" ? "/api/analyze-x" : "/api/analyze";
+
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -222,8 +334,15 @@ export default function Home() {
     if (reference) {
       matched = groups.findIndex((group, index) => {
         const rootId = String(
-          value(group.root, ["id", "postId", "rootPostId"]) ?? ""
+          value(group.root, [
+            "id",
+            "postId",
+            "rootPostId",
+            "tweetId",
+            "rest_id",
+          ]) ?? ""
         );
+
         const rootCode = String(value(group.root, ["code"]) ?? "");
 
         return (
@@ -234,8 +353,9 @@ export default function Home() {
       });
     }
 
-    // 親投稿IDがなければ、時刻などから候補を推定する。
-    if (matched < 0) {
+    // 親投稿IDがなければ、Threads用の条件で推定する。
+    // Xでは誤った紐づけを避けるため、IDがない返信は未紐づけにする。
+    if (matched < 0 && platform === "threads") {
       const replyTime = timestamp(reply);
       const position = numberValue(reply, ["threadPosition"]);
       const author = authorName(reply);
@@ -274,10 +394,12 @@ export default function Home() {
   }
 
   const totalLikes = roots.reduce((sum, post) => sum + likes(post), 0);
+
   const totalReplies = roots.reduce(
     (sum, post) => sum + repliesCount(post),
     0
   );
+
   const totalReposts = roots.reduce(
     (sum, post) => sum + reposts(post),
     0
@@ -293,7 +415,7 @@ export default function Home() {
 
     const lines: string[] = [];
 
-    lines.push("Threads Analyzer - 分析結果");
+    lines.push(`${serviceName} Analyzer - 分析結果`);
     lines.push(`プロフィール: ${result.profileUrl ?? url}`);
     lines.push(`ユーザー名: ${result.username ?? "不明"}`);
     lines.push(`出力日時: ${new Date().toLocaleString("ja-JP")}`);
@@ -375,13 +497,14 @@ export default function Home() {
 
     const downloadUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
+
     const username =
       result.username ??
-      result.profileUrl?.match(/@([\w.]+)/)?.[1] ??
-      "threads";
+      result.profileUrl?.match(/@?([\w.]+)$/)?.[1] ??
+      platform;
 
     link.href = downloadUrl;
-    link.download = `threads-analysis-${username}-${new Date()
+    link.download = `${platform}-analysis-${username}-${new Date()
       .toISOString()
       .slice(0, 10)}.txt`;
 
@@ -389,7 +512,6 @@ export default function Home() {
     link.click();
     link.remove();
 
-    // ダウンロード開始後にURLを解放する。
     window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
   }
 
@@ -403,20 +525,72 @@ export default function Home() {
         fontFamily: "Arial, sans-serif",
       }}
     >
-      <h1 style={{ fontSize: 32 }}>Threads Analyzer</h1>
+      <h1 style={{ fontSize: 32 }}>{serviceName} Analyzer</h1>
+
+      <p>分析するSNSを選択してください。</p>
+
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          margin: "16px 0 24px",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => changePlatform("threads")}
+          style={{
+            flex: 1,
+            padding: 13,
+            border: "1px solid #bbb",
+            borderRadius: 8,
+            background: platform === "threads" ? "#2563eb" : "#fff",
+            color: platform === "threads" ? "#fff" : "#172033",
+            fontSize: 16,
+            fontWeight: "bold",
+            cursor: "pointer",
+          }}
+        >
+          Threads
+        </button>
+
+        <button
+          type="button"
+          onClick={() => changePlatform("x")}
+          style={{
+            flex: 1,
+            padding: 13,
+            border: "1px solid #bbb",
+            borderRadius: 8,
+            background: platform === "x" ? "#111827" : "#fff",
+            color: platform === "x" ? "#fff" : "#172033",
+            fontSize: 16,
+            fontWeight: "bold",
+            cursor: "pointer",
+          }}
+        >
+          X
+        </button>
+      </div>
 
       <p>
         親投稿ごとに本文・分析・本人の返信をまとめて表示します。
       </p>
 
-      <label htmlFor="profile-url">ThreadsプロフィールURL</label>
+      <label htmlFor="profile-url">
+        {serviceName}プロフィールURL
+      </label>
 
       <input
         id="profile-url"
         type="url"
         value={url}
         onChange={(e) => setUrl(e.target.value)}
-        placeholder="https://www.threads.com/@username"
+        placeholder={
+          platform === "x"
+            ? "https://x.com/username"
+            : "https://www.threads.com/@username"
+        }
         style={{
           display: "block",
           width: "100%",
@@ -564,7 +738,7 @@ export default function Home() {
               >
                 <h3 style={{ marginTop: 0 }}>親投稿 {index + 1}</h3>
 
-                <PostContent post={root} />
+                <PostContent post={root} platform={platform} />
 
                 <div
                   style={{
@@ -611,7 +785,7 @@ export default function Home() {
                         }}
                       >
                         <strong>本人の返信 {replyIndex + 1}</strong>
-                        <PostContent post={reply} />
+                        <PostContent post={reply} platform={platform} />
                         <a
                           href={`#${group.anchor}`}
                           style={{ fontSize: 14 }}
@@ -625,7 +799,7 @@ export default function Home() {
                 {link.startsWith("https://") && (
                   <p style={{ marginBottom: 0 }}>
                     <a href={link} target="_blank" rel="noreferrer">
-                      親投稿をThreadsで開く
+                      親投稿を{serviceName}で開く
                     </a>
                   </p>
                 )}
@@ -653,7 +827,7 @@ export default function Home() {
                   }}
                 >
                   <strong>未紐づけの返信 {index + 1}</strong>
-                  <PostContent post={reply} />
+                  <PostContent post={reply} platform={platform} />
                 </article>
               ))}
             </section>
